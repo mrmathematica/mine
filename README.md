@@ -1,2 +1,2 @@
 # mine
-classic mine game with probability calculation
+classic minesweeper game with probability calculation
