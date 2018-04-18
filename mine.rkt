@@ -1,8 +1,10 @@
 #lang racket/gui
 
-(define height 16)Q
+(define height 16)
 (define width 30)
 (define number 99)
+
+(define remain number)
 
 (define (board-ref board x y)
   (vector-ref (vector-ref board x)
@@ -19,11 +21,11 @@
                     (make-vector width #f))))
   (let lp ((i number))
     (when (positive? i)
-      (let ((x (random height))
-            (y (random width)))
-        (if (board-ref board x y)
+      (let ((y (random height))
+            (x (random width)))
+        (if (board-ref board y x)
             (lp i)
-            (begin (board-set! board x y #t)
+            (begin (board-set! board y x #t)
                    (lp (sub1 i)))))))
   board)
 
@@ -37,7 +39,7 @@
   ;no support for `?` for now
   (build-vector height
                 (lambda (_)
-                    (make-vector width #f))))
+                  (make-vector width #f))))
 
 (define view (init-view mine height width))
 
@@ -46,70 +48,151 @@
            (< x height)
            (<= 0 y)
            (< y width))
-      (if (board-ref board x y)
+      (if (eq? (board-ref board x y) #t)
           1
           0)
       0))
 
-(define (count x y)
-  (+ (safe-ref mine (sub1 x) (sub1 y))
-     (safe-ref mine (sub1 x) y)
-     (safe-ref mine (sub1 x) (add1 y))
-     (safe-ref mine x (sub1 y))
-     (safe-ref mine x (add1 y))
-     (safe-ref mine (add1 x) (sub1 y))
-     (safe-ref mine (add1 x) y)
-     (safe-ref mine (add1 x) (add1 y))))
+(define (count board x y)
+  (+ (safe-ref board (sub1 x) (sub1 y))
+     (safe-ref board (sub1 x) y)
+     (safe-ref board (sub1 x) (add1 y))
+     (safe-ref board x (sub1 y))
+     (safe-ref board x (add1 y))
+     (safe-ref board (add1 x) (sub1 y))
+     (safe-ref board (add1 x) y)
+     (safe-ref board (add1 x) (add1 y))))
 
-(define (lost x y)
-  ;todo
-  (error x y))
+(define (victory?)
+  (let/ec k
+    (for* ((y (in-range height))
+           (x (in-range width)))
+      (unless (board-ref mine y x)
+        (unless (number? (board-ref view y x))
+          (k #f))))
+    (k #t)))  
 
-(define (left x y)
-  (cond ((board-ref view x y)
-         (void))
-        ((board-ref mine x y)
-         (lost x y))
-        (else
-         (board-set! view x y
-                     (count x y)))))
-
-(define (right x y)
-  (unless (board-ref view x y)
-    (board-set! view x y #t)))
-
-(define (vectory? view)
-  ;no #f in view
-  (andmap (lambda (line)
-            (andmap identity (vector->list line)))
-          (vector->list view)))
-
-;(define (double x y)
-  
 (define frame
   (new frame%
        [label "Mine"]))
 
 (define game-canvas%
   (class canvas%
-    (inherit refresh)
+    
+    (define (left x y)
+      (when (and (<= 0 x)
+                 (< x width)
+                 (<= 0 y)
+                 (< y height))
+        (cond ((board-ref view y x)
+               (void))
+              ((board-ref mine y x)
+               (lost x y))
+              (else
+               (define v (count mine y x))
+               (board-set! view y x v)
+               (draw-tile (send this get-dc) x y)
+               (when (zero? v)
+                 (middle x y))
+               (when (victory?)
+                  (send message set-label "You win")
+                 (sleep 3)
+                 (send frame show #f))))))
 
+    (define (right x y)
+      (define v (board-ref view y x))
+      (when (boolean? v)
+        (board-set! view y x (not v))
+        (draw-tile (send this get-dc) x y)
+        (set! remain
+              ((if v
+                   add1
+                   sub1)
+               remain))
+        (send message set-label (number->string remain))))
+    
+    (define (middle x y)
+      (define v (board-ref view y x))
+      (when (and (number? v)
+                 (= v (count view y x)))
+        (left (sub1 x) (sub1 y))
+        (left (sub1 x) y)
+        (left (sub1 x) (add1 y))
+        (left x (sub1 y))
+        (left x (add1 y))
+        (left (add1 x) (sub1 y))
+        (left (add1 x) y)
+        (left (add1 x) (add1 y))))
+
+    (define (lost x y)
+      (define dc (send this get-dc))
+      (send dc set-brush "yellow" 'solid)
+      (send dc draw-rectangle
+               (* x 40)
+               (* y 40)
+               40
+               40)
+      (send message set-label "You lost")
+      (sleep 3)
+      (send frame show #f))
+  
     (define/override (on-event me)
       (case (send me get-event-type)
         [(left-up)
-         (left (quotient (send me get-y) 40)
-               (quotient (send me get-x) 40))
-         (refresh)]
+         (left (quotient (send me get-x) 40)
+               (quotient (send me get-y) 40))]
+        [(right-up)
+         (right (quotient (send me get-x) 40)
+                (quotient (send me get-y) 40))]
+        [(middle-up)
+         (middle (quotient (send me get-x) 40)
+                 (quotient (send me get-y) 40))]
         [else (void)]))
 
     (super-new)))
 
+(define (paint-callback canvas dc)
+  (for* ((y (in-range height))
+         (x (in-range width)))
+    (draw-tile dc x y)))
+
+(define (draw-tile dc x y)
+  (define v (board-ref view y x))
+  (cond ((not v)
+         (send dc set-brush "gray" 'solid)
+         (send dc draw-rectangle
+               (* x 40)
+               (* y 40)
+               40
+               40))
+        ((number? v)
+         (send dc set-brush "light gray" 'solid)
+         (send dc draw-rectangle
+               (* x 40)
+               (* y 40)
+               40
+               40)
+         (send dc draw-text (number->string v) (* x 40) (* y 40)))
+        (else
+         (send dc set-brush "red" 'solid)
+         (send dc draw-rectangle
+               (* x 40)
+               (* y 40)
+               40
+               40))))
+              
+
 (new game-canvas%
      [parent frame]
+     [paint-callback paint-callback]
      [min-width (* width 40)]
      [min-height (* height 40)]
      [stretchable-width #f]
      [stretchable-height #f])
 
-(send frame show #t)
+(define message
+  (new message%
+       [label (number->string remain)]
+       [parent frame]))
 
+(send frame show #t)
