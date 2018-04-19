@@ -3,7 +3,6 @@
 (define height 16)
 (define width 30)
 (define number 99)
-
 (define remain number)
 
 (define (board-ref board x y)
@@ -28,7 +27,6 @@
             (begin (board-set! board y x #t)
                    (lp (sub1 i)))))))
   board)
-
 (define mine
   (make-board height width number))
 
@@ -40,17 +38,15 @@
   (build-vector height
                 (lambda (_)
                   (make-vector width #f))))
-
 (define view (init-view mine height width))
 
 (define (safe-ref board x y)
   (if (and (<= 0 x)
            (< x height)
            (<= 0 y)
-           (< y width))
-      (if (eq? (board-ref board x y) #t)
-          1
-          0)
+           (< y width)
+           (eq? (board-ref board x y) #t))
+      1
       0))
 
 (define (count board x y)
@@ -95,7 +91,7 @@
                (when (zero? v)
                  (middle x y))
                (when (victory?)
-                  (send message set-label "You win")
+                  (send message1 set-label "You win")
                  (sleep 3)
                  (send frame show #f))))))
 
@@ -109,7 +105,7 @@
                    add1
                    sub1)
                remain))
-        (send message set-label (number->string remain))))
+        (send message2 set-label (number->string remain))))
     
     (define (middle x y)
       (define v (board-ref view y x))
@@ -127,12 +123,8 @@
     (define (lost x y)
       (define dc (send this get-dc))
       (send dc set-brush "yellow" 'solid)
-      (send dc draw-rectangle
-               (* x 40)
-               (* y 40)
-               40
-               40)
-      (send message set-label "You lost")
+      (send dc draw-rectangle (* x 40) (* y 40) 40 40)
+      (send message1 set-label "You lost")
       (sleep 3)
       (send frame show #f))
   
@@ -156,31 +148,21 @@
          (x (in-range width)))
     (draw-tile dc x y)))
 
+(define font
+  (make-object font% 25 'default))
 (define (draw-tile dc x y)
   (define v (board-ref view y x))
   (cond ((not v)
          (send dc set-brush "gray" 'solid)
-         (send dc draw-rectangle
-               (* x 40)
-               (* y 40)
-               40
-               40))
+         (send dc draw-rectangle (* x 40) (* y 40) 40　40))
         ((number? v)
          (send dc set-brush "light gray" 'solid)
-         (send dc draw-rectangle
-               (* x 40)
-               (* y 40)
-               40
-               40)
-         (send dc draw-text (number->string v) (* x 40) (* y 40)))
+         (send dc draw-rectangle　(* x 40)　(* y 40)　40　40)
+         (send dc set-font font)
+         (send dc draw-text (number->string v) (+ (* x 40) 10) (+ (* y 40) 1)))
         (else
          (send dc set-brush "red" 'solid)
-         (send dc draw-rectangle
-               (* x 40)
-               (* y 40)
-               40
-               40))))
-              
+         (send dc draw-rectangle　(* x 40)　(* y 40)　40　40))))
 
 (new game-canvas%
      [parent frame]
@@ -190,9 +172,19 @@
      [stretchable-width #f]
      [stretchable-height #f])
 
-(define message
+(define pane
+  (new horizontal-pane%
+       [parent frame]))
+
+(define message1
+  (new message%
+       [label ""]
+       [parent pane]
+       [min-width 300]))
+
+(define message2
   (new message%
        [label (number->string remain)]
-       [parent frame]))
+       [parent pane]))
 
 (send frame show #t)
