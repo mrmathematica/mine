@@ -1,5 +1,7 @@
 #lang racket/gui
 
+(require racket/set)
+
 (define height 16)
 (define width 30)
 (define number 99)
@@ -40,24 +42,24 @@
                   (make-vector width #f))))
 (define view (init-view mine height width))
 
-(define (safe-ref board x y)
+(define (safe-ref board x y v)
   (if (and (<= 0 x)
            (< x height)
            (<= 0 y)
            (< y width)
-           (eq? (board-ref board x y) #t))
+           (eq? (board-ref board x y) v))
       1
       0))
 
-(define (count board x y)
-  (+ (safe-ref board (sub1 x) (sub1 y))
-     (safe-ref board (sub1 x) y)
-     (safe-ref board (sub1 x) (add1 y))
-     (safe-ref board x (sub1 y))
-     (safe-ref board x (add1 y))
-     (safe-ref board (add1 x) (sub1 y))
-     (safe-ref board (add1 x) y)
-     (safe-ref board (add1 x) (add1 y))))
+(define (count board x y v)
+  (+ (safe-ref board (sub1 x) (sub1 y) v)
+     (safe-ref board (sub1 x) y v)
+     (safe-ref board (sub1 x) (add1 y) v)
+     (safe-ref board x (sub1 y) v)
+     (safe-ref board x (add1 y) v)
+     (safe-ref board (add1 x) (sub1 y) v)
+     (safe-ref board (add1 x) y v)
+     (safe-ref board (add1 x) (add1 y) v)))
 
 (define (victory?)
   (let/ec k
@@ -66,7 +68,75 @@
       (unless (board-ref mine y x)
         (unless (number? (board-ref view y x))
           (k #f))))
-    (k #t)))  
+    (k #t)))
+
+(define (wrong-label?)
+  (let/ec k
+    (for* ((y (in-range height))
+           (x (in-range width)))
+      (when (eq? (board-ref view y x) #t)
+        (unless (eq? (board-ref mine y x) #t)
+          (k #t))))
+    (k #f)))
+
+(define (collect-equations)
+  (list->set
+   (for*/fold ((equations '()))
+              ((y (in-range height))
+               (x (in-range width)))
+     (if (and (number? (board-ref view y x))
+              (positive? (count view y x #f)))
+         (cons (generate-equation x y)
+               equations)
+         equations))))
+;equation is (cons n points), where n is number of mines, points is list of (x . y)
+(define (generate-equation x y)
+  (cons (- (board-ref view y x)
+           (count view y x #t))
+        (collect view y x #f)))
+(define (safe-collect board y x v)
+  (if (and (<= 0 y)
+           (< y height)
+           (<= 0 x)
+           (< x width)
+           (eq? (board-ref board y x) v))
+      (cons x y)
+      #f))
+(define (collect board y x v)
+  (filter identity
+          (list (safe-collect board (sub1 y) (sub1 x) v)
+                (safe-collect board (sub1 y) x v)
+                (safe-collect board (sub1 y) (add1 x) v)
+                (safe-collect board y (sub1 x) v)
+                (safe-collect board y (add1 x) v)
+                (safe-collect board (add1 y) (sub1 x) v)
+                (safe-collect board (add1 y) x v)
+                (safe-collect board (add1 y) (add1 x) v))))
+
+;solve the 2 most basic case:
+;number of mine is 0
+;mumber of mines is the smae as number of remaining tiles
+(define (simple-solver equations)
+  (define solution (make-hash))
+  (for ((e equations))
+      (cond ((zero? (car e))
+             (for ((p (cdr e)))
+               (hash-set! solution p 0)))
+            ((= (car e) (length (cdr e)))
+             (for ((p (cdr e)))
+               (hash-set! solution p 1)))))
+  solution)
+
+(define (simple b e)
+  (unless (wrong-label?)
+    (let lp ((solution (simple-solver (collect-equations))))
+      (unless (hash-empty? solution)
+        (hash-for-each solution
+                       (lambda (p v)
+                         (if (zero? v)
+                             (send game left (car p) (cdr p))
+                             (send game right (car p) (cdr p)))))
+        (lp (simple-solver (collect-equations)))))))
 
 (define frame
   (new frame%
@@ -75,7 +145,7 @@
 (define game-canvas%
   (class canvas%
     
-    (define (left x y)
+    (define/public (left x y)
       (when (and (<= 0 x)
                  (< x width)
                  (<= 0 y)
@@ -85,17 +155,17 @@
               ((board-ref mine y x)
                (lost x y))
               (else
-               (define v (count mine y x))
+               (define v (count mine y x #t))
                (board-set! view y x v)
                (draw-tile (send this get-dc) x y)
                (when (zero? v)
                  (middle x y))
                (when (victory?)
-                  (send message1 set-label "You win")
+                 (send message1 set-label "You win")
                  (sleep 3)
                  (send frame show #f))))))
 
-    (define (right x y)
+    (define/public (right x y)
       (define v (board-ref view y x))
       (when (boolean? v)
         (board-set! view y x (not v))
@@ -110,7 +180,7 @@
     (define (middle x y)
       (define v (board-ref view y x))
       (when (and (number? v)
-                 (= v (count view y x)))
+                 (= v (count view y x #t)))
         (left (sub1 x) (sub1 y))
         (left (sub1 x) y)
         (left (sub1 x) (add1 y))
@@ -164,13 +234,14 @@
          (send dc set-brush "red" 'solid)
          (send dc draw-rectangle　(* x 40)　(* y 40)　40　40))))
 
-(new game-canvas%
+(define game
+  (new game-canvas%
      [parent frame]
      [paint-callback paint-callback]
      [min-width (* width 40)]
      [min-height (* height 40)]
      [stretchable-width #f]
-     [stretchable-height #f])
+     [stretchable-height #f]))
 
 (define pane
   (new horizontal-pane%
@@ -181,6 +252,11 @@
        [label ""]
        [parent pane]
        [min-width 300]))
+
+(new button%
+     [label "Simple solver"]
+     [parent pane]
+     [callback simple])
 
 (define message2
   (new message%
