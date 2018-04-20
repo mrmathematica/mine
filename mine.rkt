@@ -51,7 +51,7 @@
       1
       0))
 
-(define (count board x y v)
+(define (board-count board x y v)
   (+ (safe-ref board (sub1 x) (sub1 y) v)
      (safe-ref board (sub1 x) y v)
      (safe-ref board (sub1 x) (add1 y) v)
@@ -85,14 +85,14 @@
               ((y (in-range height))
                (x (in-range width)))
      (if (and (number? (board-ref view y x))
-              (positive? (count view y x #f)))
+              (positive? (board-count view y x #f)))
          (cons (generate-equation x y)
                equations)
          equations))))
 ;equation is (cons n points), where n is number of mines, points is list of (x . y)
 (define (generate-equation x y)
   (cons (- (board-ref view y x)
-           (count view y x #t))
+           (board-count view y x #t))
         (collect view y x #f)))
 (define (safe-collect board y x v)
   (if (and (<= 0 y)
@@ -113,6 +113,16 @@
                 (safe-collect board (add1 y) x v)
                 (safe-collect board (add1 y) (add1 x) v))))
 
+(define (full-equations)
+  (set-add (collect-equations)
+           (remain-equation)))
+(define (remain-equation)
+  (cons remain
+        (for*/list ((y (in-range height))
+                    (x (in-range width))
+                    #:unless (board-ref view y x))
+          (cons x y))))
+
 ;solve the 2 most basic case:
 ;number of mine is 0
 ;mumber of mines is the smae as number of remaining tiles
@@ -129,14 +139,88 @@
 
 (define (simple b e)
   (unless (wrong-label?)
-    (let lp ((solution (simple-solver (collect-equations))))
+    (let lp ()
+      (define solution (simple-solver (full-equations)))
       (unless (hash-empty? solution)
         (hash-for-each solution
                        (lambda (p v)
                          (if (zero? v)
                              (send game left (car p) (cdr p))
                              (send game right (car p) (cdr p)))))
-        (lp (simple-solver (collect-equations)))))))
+        (lp)))))
+
+(define (equations->table equations)
+  (define table (make-hash))
+  (for ((e equations))
+    (for ((p (cdr e)))
+      (hash-update! table
+                    p
+                    (lambda (es) (cons e es))
+                    '())))
+  table)
+
+(define (group equations)
+  (define table (equations->table equations))
+  (let lp ((groups '())
+           (equations equations))
+    (if (set-empty? equations)
+        groups
+        (let ((visited? (mutable-set))
+              (queue (list (set-first equations))))
+          (let lp2 ()
+            (if (empty? queue)
+                (lp (cons visited? groups)
+                    (set-subtract equations visited?))
+                (let ((e (car queue)))
+                  (set! queue (cdr queue))
+                  (set-add! visited? e)
+                  (for* ((p (cdr e))
+                         (e (hash-ref table p '()))
+                         #:unless (set-member? visited? e))
+                    (set! queue (cons e queue)))
+                  (lp2))))))))
+
+(define (block-solve equations)
+  (define table (equations->table equations))
+  (define solution '())
+  (define (try assign to-assign)
+    (cond ((empty? to-assign)
+           (set! solution (cons assign solution)))
+          (else
+           (when (test (car to-assign) 0 assign table)
+             (try (hash-set assign (car to-assign) 0)
+                  (cdr to-assign)))
+           (when (test (car to-assign) 1 assign table)
+             (try (hash-set assign (car to-assign) 1)
+                  (cdr to-assign))))))
+  (try (make-immutable-hash)
+       (hash-keys table))
+  solution)
+
+(define (test p v assign table)
+  (define new-assign (hash-set assign p v))
+  (for/and ((e (hash-ref table p)))
+    (let* ((n (car e))
+           (ps (cdr e))
+           (mines (map (lambda (p) (hash-ref new-assign p #f)) ps))
+           (existing (apply + (filter number? mines))))
+      (<= existing
+          n
+          (+ existing (count not mines))))))
+
+(define (block-prob equations)
+  (define prob (make-hash))
+  (define ss (block-solve equations))
+  (define n (length ss))
+  (for ((s ss))
+    (hash-for-each s
+                   (lambda (p v)
+                     (hash-update! prob
+                                   p
+                                   (lambda (old-v) (+ old-v (/ v n)))
+                                   0))))
+  ;todo: this is wrong, need to count totoal number of mines in this block
+  prob)
 
 (define frame
   (new frame%
@@ -155,7 +239,7 @@
               ((board-ref mine y x)
                (lost x y))
               (else
-               (define v (count mine y x #t))
+               (define v (board-count mine y x #t))
                (board-set! view y x v)
                (draw-tile (send this get-dc) x y)
                (when (zero? v)
@@ -180,7 +264,7 @@
     (define (middle x y)
       (define v (board-ref view y x))
       (when (and (number? v)
-                 (= v (count view y x #t)))
+                 (= v (board-count view y x #t)))
         (left (sub1 x) (sub1 y))
         (left (sub1 x) y)
         (left (sub1 x) (add1 y))
@@ -264,3 +348,6 @@
        [parent pane]))
 
 (send frame show #t)
+
+;(map block-prob (group (collect-equations)))
+;(block-prob (full-equations))
