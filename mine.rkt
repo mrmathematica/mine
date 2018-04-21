@@ -1,6 +1,7 @@
 #lang racket/gui
 
-(require racket/set)
+(require racket/set
+         math/number-theory)
 
 (define height 16)
 (define width 30)
@@ -129,12 +130,12 @@
 (define (simple-solver equations)
   (define solution (make-hash))
   (for ((e equations))
-      (cond ((zero? (car e))
-             (for ((p (cdr e)))
-               (hash-set! solution p 0)))
-            ((= (car e) (length (cdr e)))
-             (for ((p (cdr e)))
-               (hash-set! solution p 1)))))
+    (cond ((zero? (car e))
+           (for ((p (cdr e)))
+             (hash-set! solution p 0)))
+          ((= (car e) (length (cdr e)))
+           (for ((p (cdr e)))
+             (hash-set! solution p 1)))))
   solution)
 
 (define (simple b e)
@@ -208,19 +209,53 @@
           n
           (+ existing (count not mines))))))
 
+;number of untouched tiles
+(define (board-size)
+  (apply +
+         (map (lambda (r) (vector-count not r))
+              (vector->list view))))
+
 (define (block-prob equations)
-  (define prob (make-hash))
   (define ss (block-solve equations))
-  (define n (length ss))
+  (define st (make-hash))
+  (define block-size (hash-count (car ss)))
+  (define puzzle-size (board-size))
+  ;group solutions by number of mines
   (for ((s ss))
-    (hash-for-each s
+    (hash-update! st
+                  (apply + (hash-values s))
+                  (lambda (t) (cons s t))
+                  '()))
+  (weight
+   (hash-map st
+             (lambda (n ss)
+               (define prob (make-hash))
+               (define l (length ss))
+               (for ((s ss))
+                 (hash-for-each s
+                                (lambda (p v)
+                                  (hash-update! prob
+                                                p
+                                                (lambda (old-v) (+ old-v (/ v l)))
+                                                0))))
+               (cons (place puzzle-size remain block-size n)
+                     prob)))))
+
+(define (place N n M m)
+  (* (binomial M m)
+     (binomial (- N M) (- n m))))
+
+(define (weight lst)
+  (define total (apply + (map car lst)))
+  (define res (make-hash))
+  (for ((s lst))
+    (hash-for-each (cdr s)
                    (lambda (p v)
-                     (hash-update! prob
+                     (hash-update! res
                                    p
-                                   (lambda (old-v) (+ old-v (/ v n)))
+                                   (lambda (old-v) (+ old-v (/ (* (car s) v) total)))
                                    0))))
-  ;todo: this is wrong, need to count totoal number of mines in this block
-  prob)
+  res)
 
 (define frame
   (new frame%
@@ -320,12 +355,12 @@
 
 (define game
   (new game-canvas%
-     [parent frame]
-     [paint-callback paint-callback]
-     [min-width (* width 40)]
-     [min-height (* height 40)]
-     [stretchable-width #f]
-     [stretchable-height #f]))
+       [parent frame]
+       [paint-callback paint-callback]
+       [min-width (* width 40)]
+       [min-height (* height 40)]
+       [stretchable-width #f]
+       [stretchable-height #f]))
 
 (define pane
   (new horizontal-pane%
