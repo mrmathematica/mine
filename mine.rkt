@@ -242,8 +242,14 @@
                      prob)))))
 
 (define (place N n M m)
-  (* (binomial M m)
-     (binomial (- N M) (- n m))))
+  (* (my-binomial M m)
+     (my-binomial (- N M) (- n m))))
+
+(define (my-binomial n m)
+  (if (or (negative? m)
+          (negative? n))
+      0
+      (binomial n m)))
 
 (define (weight lst)
   (define total (apply + (map car lst)))
