@@ -1,6 +1,7 @@
 #lang racket/gui
 
 (require racket/set
+         racket/hash
          math/number-theory)
 
 (define height 16)
@@ -140,15 +141,18 @@
 
 (define (simple b e)
   (unless (wrong-label?)
-    (let lp ()
-      (define solution (simple-solver (full-equations)))
-      (unless (hash-empty? solution)
-        (hash-for-each solution
-                       (lambda (p v)
-                         (if (zero? v)
-                             (send game left (car p) (cdr p))
-                             (send game right (car p) (cdr p)))))
-        (lp)))))
+    (simple2)))
+
+(define (simple2)
+  (let lp ()
+    (define solution (simple-solver (full-equations)))
+    (unless (hash-empty? solution)
+      (hash-for-each solution
+                     (lambda (p v)
+                       (if (zero? v)
+                           (send game left (car p) (cdr p))
+                           (send game right (car p) (cdr p)))))
+      (lp))))
 
 (define (equations->table equations)
   (define table (make-hash))
@@ -216,34 +220,29 @@
               (vector->list view))))
 
 (define (block-prob equations)
+  ;assumes there is only one block to solve in the full board
   (define ss (block-solve equations))
   (define st (make-hash))
   (define block-size (hash-count (car ss)))
   (define puzzle-size (board-size))
-  ;group solutions by number of mines
+  (define sum 0)
   (for ((s ss))
-    (hash-update! st
-                  (apply + (hash-values s))
-                  (lambda (t) (cons s t))
-                  '()))
-  (weight
-   (hash-map st
-             (lambda (n ss)
-               (define prob (make-hash))
-               (define l (length ss))
-               (for ((s ss))
-                 (hash-for-each s
-                                (lambda (p v)
-                                  (hash-update! prob
-                                                p
-                                                (lambda (old-v) (+ old-v (/ v l)))
-                                                0))))
-               (cons (place puzzle-size remain block-size n)
-                     prob)))))
+    (define n (apply + (hash-values s)))
+    (define comb (place puzzle-size remain block-size n))
+    (hash-for-each s
+                   (lambda (p v)
+                     (hash-update! st
+                                   p
+                                   (lambda (old-v)
+                                     (+ old-v (* v comb)))
+                                   0)))
+    (set! sum (+ sum comb)))
+  (make-immutable-hash (hash-map st
+                                 (lambda (p v)
+                                   (cons p (/ v sum))))))
 
 (define (place N n M m)
-  (* (my-binomial M m)
-     (my-binomial (- N M) (- n m))))
+  (my-binomial (- N M) (- n m)))
 
 (define (my-binomial n m)
   (if (or (negative? m)
@@ -251,17 +250,78 @@
       0
       (binomial n m)))
 
-(define (weight lst)
-  (define total (apply + (map car lst)))
-  (define res (make-hash))
-  (for ((s lst))
-    (hash-for-each (cdr s)
-                   (lambda (p v)
-                     (hash-update! res
-                                   p
-                                   (lambda (old-v) (+ old-v (/ (* (car s) v) total)))
-                                   0))))
-  res)
+(define (safe　b e)
+  (unless (wrong-label?)
+    (safe2)))
+
+(define (safe2)
+  (let lp ()
+    (simple2)
+    (define block-solution
+      (map block-prob (group (collect-equations))))
+    (unless (empty? block-solution)
+      (define solution
+        (apply hash-union block-solution))
+      (define n (apply + (hash-values solution)))
+      (define sure
+        (filter (lambda (s)
+                  (integer? (cdr s)))
+                (hash->list
+                 (if (< remain (+ n 4))
+                     (block-prob (full-equations))
+                     solution))))
+      (unless (empty? sure)
+        (for ((s sure))
+          (if (zero? (cdr s))
+              (send game left (caar s) (cdar s))
+              (send game right (caar s) (cdar s))))
+        (lp)))))
+             
+(define (auto b e)
+  (let/ec k
+    (let lp ()
+      (safe2)
+      (define block-solution
+        (map block-prob (group (collect-equations))))
+      (define front-solution
+        (if (empty? block-solution)
+            (make-immutable-hash)
+            (apply hash-union block-solution)))
+      (define n (apply + (hash-values front-solution)))
+      (define solution
+        (if (< remain (+ n 4))
+            (hash->list (block-prob (full-equations)))
+            (make-full front-solution n)))
+      (when (empty? solution)
+        (k (void)))
+      (define p (find-min solution))
+      (println p)
+      (send game left (car p) (cdr p))
+      (lp))))
+
+(define (make-full solution n)
+  (define untouched
+    (for*/list ((y (in-range height))
+                (x (in-range width))
+                #:unless (or (board-ref view y x)
+                             (hash-has-key? solution (cons x y))))
+      (cons x y)))
+  (define v (/ (- remain n)
+               (length untouched)))
+  (hash-union solution
+              (make-immutable-hash
+               (map (lambda (p)
+                      (cons p v))
+                    untouched))))
+
+(define (find-min solution)
+  (define c 2)
+  (define b #f)
+  (for (((p v) solution))
+    (when (< v c)
+      (set! b p)
+      (set! c v)))
+  b)
 
 (define frame
   (new frame%
@@ -349,7 +409,7 @@
   (define v (board-ref view y x))
   (cond ((not v)
          (send dc set-brush "gray" 'solid)
-         (send dc draw-rectangle (* x 40) (* y 40) 40　40))
+         (send dc draw-rectangle (* x 40) (* y 40) 40 40))
         ((number? v)
          (send dc set-brush "light gray" 'solid)
          (send dc draw-rectangle　(* x 40)　(* y 40)　40　40)
@@ -382,6 +442,21 @@
      [label "Simple solver"]
      [parent pane]
      [callback simple])
+        
+(new button%
+     [label "Safe solver"]
+     [parent pane]
+     [callback safe])
+
+(new button%
+     [label "Hint"]
+     [parent pane]
+     [callback void])
+
+(new button%
+     [label "Full auto"]
+     [parent pane]
+     [callback auto])
 
 (define message2
   (new message%
