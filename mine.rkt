@@ -250,7 +250,7 @@
       0
       (binomial n m)))
 
-(define (safe　b e)
+(define (safe b e)
   (unless (wrong-label?)
     (safe2)))
 
@@ -267,7 +267,7 @@
         (filter (lambda (s)
                   (integer? (cdr s)))
                 (hash->list
-                 (if (< remain (+ n 4))
+                 (if (< remain (+ n 1))
                      (block-prob (full-equations))
                      solution))))
       (unless (empty? sure)
@@ -289,13 +289,14 @@
             (apply hash-union block-solution)))
       (define n (apply + (hash-values front-solution)))
       (define solution
-        (if (< remain (+ n 4))
-            (hash->list (block-prob (full-equations)))
+        (if (< remain (+ n 1))
+            (block-prob (full-equations))
             (make-full front-solution n)))
       (when (empty? solution)
         (k (void)))
       (define p (find-min solution))
-      (println p)
+      (unless p
+        (k (void)))
       (send game left (car p) (cdr p))
       (lp))))
 
@@ -316,12 +317,42 @@
 
 (define (find-min solution)
   (define c 2)
-  (define b #f)
+  (define b '())
   (for (((p v) solution))
-    (when (< v c)
-      (set! b p)
-      (set! c v)))
-  b)
+    (cond ((< v c)
+           (set! b (list p))
+           (set! c v))
+          ((= v c)
+           (set! b (cons p b)))))
+  (values b c))
+
+(define (hint b e)
+  (define block-solution
+    (map block-prob (group (collect-equations))))
+  (define front-solution
+    (if (empty? block-solution)
+        (make-immutable-hash)
+        (apply hash-union block-solution)))
+  (define n (apply + (hash-values front-solution)))
+  (define solution
+    (if (< remain (+ n 1))
+        (block-prob (full-equations))
+        (make-full front-solution n)))
+  (define dc (send game get-dc))
+  (unless (empty? solution)
+    (let-values (((m p)
+                  (find-min solution)))
+      (send message1 set-label (number->string p))
+      (for ((d m))
+        (green #t d dc))
+      (sleep 3)
+      (send message1 set-label "")
+      (for ((d m))
+        (green #f d dc)))))
+
+(define (green g p dc)
+  (send dc set-brush (if g "green" "gray") 'solid)
+  (send dc draw-rectangle (* (car p) 40) (* (cdr p) 40) 40 40))
 
 (define frame
   (new frame%
@@ -412,12 +443,12 @@
          (send dc draw-rectangle (* x 40) (* y 40) 40 40))
         ((number? v)
          (send dc set-brush "light gray" 'solid)
-         (send dc draw-rectangle　(* x 40)　(* y 40)　40　40)
+         (send dc draw-rectangle (* x 40) (* y 40) 40 40)
          (send dc set-font font)
          (send dc draw-text (number->string v) (+ (* x 40) 10) (+ (* y 40) 1)))
         (else
          (send dc set-brush "red" 'solid)
-         (send dc draw-rectangle　(* x 40)　(* y 40)　40　40))))
+         (send dc draw-rectangle (* x 40) (* y 40) 40 40))))
 
 (define game
   (new game-canvas%
@@ -438,25 +469,21 @@
        [parent pane]
        [min-width 300]))
 
-(new button%
-     [label "Simple solver"]
-     [parent pane]
-     [callback simple])
+(void
+ (new button%
+      [label "Simple solver"]
+      [parent pane]
+      [callback simple])
         
-(new button%
-     [label "Safe solver"]
-     [parent pane]
-     [callback safe])
+ (new button%
+      [label "Safe solver"]
+      [parent pane]
+      [callback safe])
 
-(new button%
-     [label "Hint"]
-     [parent pane]
-     [callback void])
-
-(new button%
-     [label "Full auto"]
-     [parent pane]
-     [callback auto])
+ (new button%
+      [label "Hint"]
+      [parent pane]
+      [callback hint]))
 
 (define message2
   (new message%
@@ -464,6 +491,3 @@
        [parent pane]))
 
 (send frame show #t)
-
-;(map block-prob (group (collect-equations)))
-;(block-prob (full-equations))
