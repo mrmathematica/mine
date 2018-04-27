@@ -199,7 +199,9 @@
              (try (hash-set assign (car to-assign) 1)
                   (cdr to-assign))))))
   (try (make-immutable-hash)
-       (hash-keys table))
+       (sort (hash-keys table) <
+             #:key (lambda (p) (+ (* (car p) 16)
+                                  (cdr p)))))
   solution)
 
 (define (test p v assign table)
