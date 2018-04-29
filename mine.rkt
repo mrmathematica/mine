@@ -200,7 +200,7 @@
                   (cdr to-assign))))))
   (try (make-immutable-hash)
        (sort (hash-keys table) <
-             #:key (lambda (p) (+ (* (car p) 16)
+             #:key (lambda (p) (+ (* (car p) height)
                                   (cdr p)))))
   solution)
 
