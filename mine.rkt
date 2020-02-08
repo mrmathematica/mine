@@ -1,128 +1,265 @@
 #lang racket/gui
 
-(require racket/set
+(require ffi/unsafe
+         racket/set
          racket/hash
          math/number-theory)
 
+(define gdi32
+  (ffi-lib "gdi32"))
+
+(define user32
+  (ffi-lib "user32"))
+
+(define GetDCEx
+  (get-ffi-obj 'GetDCEx user32
+               (_fun _pointer (_pointer = #f) (_uint = 3) -> _pointer)))
+
+(define GetPixel
+  (get-ffi-obj 'GetPixel gdi32
+               (_fun _pointer _int _int -> _uint32)))
+
+(define (p->c p)
+  (list (bitwise-bit-field p 0 8)
+        (bitwise-bit-field p 8 16)
+        (bitwise-bit-field p 16 24)))
+
+(define GetForegroundWindow
+  (get-ffi-obj 'GetForegroundWindow user32
+               (_fun -> _pointer)))
+
+(define GetWindowTextLengthA
+  (get-ffi-obj 'GetWindowTextLengthA user32
+               (_fun _pointer -> _int)))
+
+(define PostMessage
+  (get-ffi-obj 'PostMessageA user32
+               (_fun _pointer _uint _uint _uint -> _bool)))
+
+(define-cstruct _RECT
+  ((left _long) (top _long) (right _long) (bottom _long)))
+
+(define GetWindowRect
+  (let ((get
+         (get-ffi-obj 'GetWindowRect user32
+                      (_fun _pointer _RECT-pointer -> _bool))))
+    (lambda (hWnd)
+      (define lpRect (make-RECT 0 0 0 0))
+      (get hWnd lpRect)
+      lpRect)))
+
+(define SetCursorPos
+  (get-ffi-obj 'SetCursorPos user32
+               (_fun _int _int -> _bool)))
+
+(define (left hWnd x y)
+  (SetCursorPos (+ x (RECT-left rect))
+                (+ y (RECT-top rect)))
+  (sleep 0.05)
+  (PostMessage hWnd #x0201 1 0)
+  (PostMessage hWnd #x0202 1 0)
+  (sleep 0.05))
+
+(define (right hWnd x y)
+  (SetCursorPos (+ x (RECT-left rect))
+                (+ y (RECT-top rect)))
+  (sleep 0.05)
+  (PostMessage hWnd #x0204 2 0)
+  (PostMessage hWnd #x0205 2 0))
+
+
+(define window
+  (GetForegroundWindow))
+(define rect
+  (GetWindowRect window))
+
+(define len (GetWindowTextLengthA window))
+
+(define GetWindowTextA
+  (get-ffi-obj 'GetWindowTextA user32
+               (_fun _pointer (s : (_bytes o len)) (_int = len) -> _int
+                     -> s)))
+
+(define text (GetWindowTextA window))
+(unless (and (= (bytes-ref text 0) 201)
+             (= (bytes-ref text 1) 168))
+  (error "current windows is not 扫雷"))
+(define dc
+  (GetDCEx window))
+
+(define xbase 48)
+(define ybase 90)
+(define grid 18)
+
+(define (read x y)
+  (define p1
+    (GetPixel dc
+              (+ (* x grid) xbase)
+              (+ (* y grid) ybase)))
+  (define p2
+    (GetPixel dc
+              (+ (* x grid) xbase 0)
+              (+ (* y grid) ybase 2)))
+  (define p4
+    (GetPixel dc
+              (+ (* x grid) xbase 3)
+              (+ (* y grid) ybase 3)))
+  (define p8
+    (GetPixel dc
+              (+ (* x grid) xbase -2)
+              (+ (* y grid) ybase 2)))
+  (cond ((= p1 12472384)
+         1)
+        ((and (>= (bitwise-bit-field p8 0 8) 150)
+              (< (bitwise-bit-field p8 8 16) 50)
+              (< (bitwise-bit-field p8 16 24) 50))
+         8)        
+        ((and (>= (bitwise-bit-field p2 8 16) 90)
+              (< (bitwise-bit-field p2 0 8) 80)
+              (< (bitwise-bit-field p2 16 24) 80))
+         2)
+        ((and (>= (bitwise-bit-field p1 0 8) 150)
+              (< (bitwise-bit-field p1 8 16) 60)
+              (< (bitwise-bit-field p1 16 24) 70))
+         3)
+        ((and (>= (bitwise-bit-field p4 16 24) 120)
+              (< (bitwise-bit-field p4 0 8) 40)
+              (< (bitwise-bit-field p4 8 16) 40))
+         4)
+        ((and (>= (bitwise-bit-field p1 0 8) 100)
+              (< (bitwise-bit-field p1 8 16) 20)
+              (< (bitwise-bit-field p1 16 24) 20))
+         5)
+        ((and (< (bitwise-bit-field p1 0 8) 100)
+              (> (bitwise-bit-field p1 8 16) 100)
+              (> (bitwise-bit-field p1 16 24) 100))
+         6)
+        ((and (>= (bitwise-bit-field p2 0 8) 150)
+              (< (bitwise-bit-field p2 8 16) 100)
+              (< (bitwise-bit-field p2 16 24) 100))
+         7)
+        ((and (>= (bitwise-bit-field p1 0 8) 160)
+              (>= (bitwise-bit-field p1 8 16) 170)
+              (>= (bitwise-bit-field p1 16 24) 180))
+         0)
+        (else
+         (println x)
+         (println y)
+         (println (p->c p1))
+         (println (p->c p2))
+         (println (p->c p4))
+         (println (p->c p8)))))
+
+(define (read-p x y)
+  (define target (make-bitmap 9 9))
+  (define a-dc (new bitmap-dc% [bitmap target]))
+  (for* ((x1 (in-range 9))
+         (y1 (in-range 9)))
+    (define color
+      (apply make-object color%
+             (p->c
+              (GetPixel dc
+                        (+ (* x grid) xbase
+                           x1 -4
+                           0)
+                        (+ (* y grid) ybase
+                           y1 -4
+                           0)))))
+    (send a-dc set-pen color 0 'solid)
+    (send a-dc draw-point x1 y1))
+  (make-object image-snip% target))
+
+(define (open x y)
+  (left window
+        (+ (* x grid) xbase)
+        (+ (* y grid) ybase)))
+(define (mark x y)
+  (right window
+        (+ (* x grid) xbase)
+        (+ (* y grid) ybase)))
+
 (define height 16)
 (define width 30)
-(define number 99)
-(define remain number)
+(define remain 99)
 
-(define (board-ref board x y)
-  (vector-ref (vector-ref board x)
-              y))
-(define (board-set! board x y v)
-  (vector-set! (vector-ref board x)
-               y
+(define-syntax-rule (board-ref x y)
+  (vector-ref (vector-ref board y)
+              x))
+(define-syntax-rule (board-set! board x y v)
+  (vector-set! (vector-ref board y)
+               x
                v))
 
-(define (make-board height width number)
-  (define board
-    (build-vector height
-                  (lambda (_)
-                    (make-vector width #f))))
-  (let lp ((i number))
-    (when (positive? i)
-      (let ((y (random height))
-            (x (random width)))
-        (if (board-ref board y x)
-            (lp i)
-            (begin (board-set! board y x #t)
-                   (lp (sub1 i)))))))
-  board)
-(define mine
-  (make-board height width number))
-
-(define (init-view mine height width)
+(define board
   ;0-8 for revealed cell with number
   ;#f for untouched cell
-  ;#t for cell labeled as mine
-  ;no support for `?` for now
+  ;#t for known mine
   (build-vector height
                 (lambda (_)
                   (make-vector width #f))))
-(define view (init-view mine height width))
 
-(define (safe-ref board x y v)
+(define (safe-ref x y v)
   (if (and (<= 0 x)
-           (< x height)
+           (< x width)
            (<= 0 y)
-           (< y width)
-           (eq? (board-ref board x y) v))
+           (< y height)
+           (eq? (board-ref x y) v))
       1
       0))
 
-(define (board-count board x y v)
-  (+ (safe-ref board (sub1 x) (sub1 y) v)
-     (safe-ref board (sub1 x) y v)
-     (safe-ref board (sub1 x) (add1 y) v)
-     (safe-ref board x (sub1 y) v)
-     (safe-ref board x (add1 y) v)
-     (safe-ref board (add1 x) (sub1 y) v)
-     (safe-ref board (add1 x) y v)
-     (safe-ref board (add1 x) (add1 y) v)))
-
-(define (victory?)
-  (let/ec k
-    (for* ((y (in-range height))
-           (x (in-range width)))
-      (unless (board-ref mine y x)
-        (unless (number? (board-ref view y x))
-          (k #f))))
-    (k #t)))
-
-(define (wrong-label?)
-  (let/ec k
-    (for* ((y (in-range height))
-           (x (in-range width)))
-      (when (eq? (board-ref view y x) #t)
-        (unless (eq? (board-ref mine y x) #t)
-          (k #t))))
-    (k #f)))
+;count number of v in the neighbore of x y
+(define (board-count x y v)
+  (+ (safe-ref (sub1 x) (sub1 y) v)
+     (safe-ref (sub1 x) y v)
+     (safe-ref (sub1 x) (add1 y) v)
+     (safe-ref x (sub1 y) v)
+     (safe-ref x (add1 y) v)
+     (safe-ref (add1 x) (sub1 y) v)
+     (safe-ref (add1 x) y v)
+     (safe-ref (add1 x) (add1 y) v)))
 
 (define (collect-equations)
   (list->set
    (for*/fold ((equations '()))
-              ((y (in-range height))
-               (x (in-range width)))
-     (if (and (number? (board-ref view y x))
-              (positive? (board-count view y x #f)))
+              ((x (in-range width))
+               (y (in-range height)))
+     (if (and (number? (board-ref x y))
+              (positive? (board-count x y #f)))
          (cons (generate-equation x y)
                equations)
          equations))))
 ;equation is (cons n points), where n is number of mines, points is list of (x . y)
 (define (generate-equation x y)
-  (cons (- (board-ref view y x)
-           (board-count view y x #t))
-        (collect view y x #f)))
-(define (safe-collect board y x v)
-  (if (and (<= 0 y)
-           (< y height)
-           (<= 0 x)
+  (cons (- (board-ref x y)
+           (board-count x y #t))
+        (collect x y)))
+(define (safe-collect x y)
+  (if (and (<= 0 x)
            (< x width)
-           (eq? (board-ref board y x) v))
+           (<= 0 y)
+           (< y height)
+           (eq? (board-ref x y) #f))
       (cons x y)
       #f))
-(define (collect board y x v)
+(define (collect x y)
   (filter identity
-          (list (safe-collect board (sub1 y) (sub1 x) v)
-                (safe-collect board (sub1 y) x v)
-                (safe-collect board (sub1 y) (add1 x) v)
-                (safe-collect board y (sub1 x) v)
-                (safe-collect board y (add1 x) v)
-                (safe-collect board (add1 y) (sub1 x) v)
-                (safe-collect board (add1 y) x v)
-                (safe-collect board (add1 y) (add1 x) v))))
+          (list (safe-collect (add1 x) y)
+                (safe-collect (add1 x) (add1 y))
+                (safe-collect x (add1 y))
+                (safe-collect (sub1 x) (add1 y))
+                (safe-collect (sub1 x) y)
+                (safe-collect (sub1 x) (sub1 y))
+                (safe-collect x (sub1 y))
+                (safe-collect (add1 x) (sub1 y)))))
 
 (define (full-equations)
   (set-add (collect-equations)
            (remain-equation)))
 (define (remain-equation)
   (cons remain
-        (for*/list ((y (in-range height))
-                    (x (in-range width))
-                    #:unless (board-ref view y x))
+        (for*/list ((x (in-range width))
+                    (y (in-range height))
+                    #:unless (board-ref x y))
           (cons x y))))
 
 ;solve the 2 most basic case:
@@ -138,21 +275,43 @@
            (for ((p (cdr e)))
              (hash-set! solution p 1)))))
   solution)
-
-(define (simple b e)
-  (unless (wrong-label?)
-    (simple2)))
-
-(define (simple2)
+(define (simple)
   (let lp ()
     (define solution (simple-solver (full-equations)))
     (unless (hash-empty? solution)
       (hash-for-each solution
                      (lambda (p v)
                        (if (zero? v)
-                           (send game left (car p) (cdr p))
-                           (send game right (car p) (cdr p)))))
+                           (open-and-read (car p) (cdr p))
+                           (sudo-right (car p) (cdr p)))))
       (lp))))
+
+(define (open-and-read x y)
+  (open x y)
+  (recursive-read x y))
+(define (recursive-read x y)
+  (when (and (<= 0 x)
+             (< x width)
+             (<= 0 y)
+             (< y height)
+             (eq? (board-ref x y) #f))
+    (define n (read x y))
+    (board-set! board x y n)
+    (when (zero? n)
+      (recursive-read (add1 x) y)
+      (recursive-read (add1 x) (add1 y))
+      (recursive-read x (add1 y))
+      (recursive-read (sub1 x) (add1 y))
+      (recursive-read (sub1 x) y)
+      (recursive-read (sub1 x) (sub1 y))
+      (recursive-read x (sub1 y))
+      (recursive-read (add1 x) (sub1 y)))))
+
+(define (sudo-right x y)
+  (unless (board-ref x y)
+    (board-set! board x y #t)
+    ;(mark x y)
+    (set! remain (sub1 remain))))
 
 (define (equations->table equations)
   (define table (make-hash))
@@ -203,7 +362,6 @@
              #:key (lambda (p) (+ (* (car p) height)
                                   (cdr p)))))
   solution)
-
 (define (test p v assign table)
   (define new-assign (hash-set assign p v))
   (for/and ((e (hash-ref table p)))
@@ -219,7 +377,7 @@
 (define (board-size)
   (apply +
          (map (lambda (r) (vector-count not r))
-              (vector->list view))))
+              (vector->list board))))
 
 (define (block-prob equations)
   ;assumes there is only one block to solve in the full board
@@ -252,13 +410,9 @@
       0
       (binomial n m)))
 
-(define (safe b e)
-  (unless (wrong-label?)
-    (safe2)))
-
-(define (safe2)
+(define (safe)
   (let lp ()
-    (simple2)
+    (simple)
     (define block-solution
       (map block-prob (group (collect-equations))))
     (unless (empty? block-solution)
@@ -275,14 +429,14 @@
       (unless (empty? sure)
         (for ((s sure))
           (if (zero? (cdr s))
-              (send game left (caar s) (cdar s))
-              (send game right (caar s) (cdar s))))
+              (open-and-read (caar s) (cdar s))
+              (sudo-right (caar s) (cdar s))))
         (lp)))))
-             
-(define (auto b e)
+
+(define (auto)
   (let/ec k
     (let lp ()
-      (safe2)
+      (safe)
       (define block-solution
         (map block-prob (group (collect-equations))))
       (define front-solution
@@ -299,14 +453,14 @@
       (define p (find-min solution))
       (unless p
         (k (void)))
-      (send game left (car p) (cdr p))
+      (open-and-read (car p) (cdr p))
       (lp))))
 
 (define (make-full solution n)
   (define untouched
-    (for*/list ((y (in-range height))
-                (x (in-range width))
-                #:unless (or (board-ref view y x)
+    (for*/list ((x (in-range width))
+                (y (in-range height))
+                #:unless (or (board-ref x y)
                              (hash-has-key? solution (cons x y))))
       (cons x y)))
   (define v (/ (- remain n)
@@ -326,170 +480,14 @@
            (set! c v))
           ((= v c)
            (set! b (cons p b)))))
-  (values b c))
+  (car b))
 
-(define (hint b e)
-  (define block-solution
-    (map block-prob (group (collect-equations))))
-  (define front-solution
-    (if (empty? block-solution)
-        (make-immutable-hash)
-        (apply hash-union block-solution)))
-  (define n (apply + (hash-values front-solution)))
-  (define solution
-    (if (< remain (+ n 1))
-        (block-prob (full-equations))
-        (make-full front-solution n)))
-  (define dc (send game get-dc))
-  (unless (empty? solution)
-    (let-values (((m p)
-                  (find-min solution)))
-      (send message1 set-label (number->string p))
-      (for ((d m))
-        (green #t d dc))
-      (sleep 3)
-      (send message1 set-label "")
-      (for ((d m))
-        (green #f d dc)))))
+(sleep 1)
+(open-and-read (random width) (random height))
+(with-handlers ((exn? void))
+  (auto))
 
-(define (green g p dc)
-  (send dc set-brush (if g "green" "gray") 'solid)
-  (send dc draw-rectangle (* (car p) 40) (* (cdr p) 40) 40 40))
-
-(define frame
-  (new frame%
-       [label "Mine"]))
-
-(define game-canvas%
-  (class canvas%
-    
-    (define/public (left x y)
-      (when (and (<= 0 x)
-                 (< x width)
-                 (<= 0 y)
-                 (< y height))
-        (cond ((board-ref view y x)
-               (void))
-              ((board-ref mine y x)
-               (lost x y))
-              (else
-               (define v (board-count mine y x #t))
-               (board-set! view y x v)
-               (draw-tile (send this get-dc) x y)
-               (when (zero? v)
-                 (middle x y))
-               (when (victory?)
-                 (send message1 set-label "You win")
-                 (sleep 3)
-                 (send frame show #f))))))
-
-    (define/public (right x y)
-      (define v (board-ref view y x))
-      (when (boolean? v)
-        (board-set! view y x (not v))
-        (draw-tile (send this get-dc) x y)
-        (set! remain
-              ((if v
-                   add1
-                   sub1)
-               remain))
-        (send message2 set-label (number->string remain))))
-    
-    (define (middle x y)
-      (define v (board-ref view y x))
-      (when (and (number? v)
-                 (= v (board-count view y x #t)))
-        (left (sub1 x) (sub1 y))
-        (left (sub1 x) y)
-        (left (sub1 x) (add1 y))
-        (left x (sub1 y))
-        (left x (add1 y))
-        (left (add1 x) (sub1 y))
-        (left (add1 x) y)
-        (left (add1 x) (add1 y))))
-
-    (define (lost x y)
-      (define dc (send this get-dc))
-      (send dc set-brush "yellow" 'solid)
-      (send dc draw-rectangle (* x 40) (* y 40) 40 40)
-      (send message1 set-label "You lost")
-      (sleep 3)
-      (send frame show #f))
-  
-    (define/override (on-event me)
-      (case (send me get-event-type)
-        [(left-up)
-         (left (quotient (send me get-x) 40)
-               (quotient (send me get-y) 40))]
-        [(right-up)
-         (right (quotient (send me get-x) 40)
-                (quotient (send me get-y) 40))]
-        [(middle-up)
-         (middle (quotient (send me get-x) 40)
-                 (quotient (send me get-y) 40))]
-        [else (void)]))
-
-    (super-new)))
-
-(define (paint-callback canvas dc)
-  (for* ((y (in-range height))
-         (x (in-range width)))
-    (draw-tile dc x y)))
-
-(define font
-  (make-object font% 25 'default))
-(define (draw-tile dc x y)
-  (define v (board-ref view y x))
-  (cond ((not v)
-         (send dc set-brush "gray" 'solid)
-         (send dc draw-rectangle (* x 40) (* y 40) 40 40))
-        ((number? v)
-         (send dc set-brush "light gray" 'solid)
-         (send dc draw-rectangle (* x 40) (* y 40) 40 40)
-         (send dc set-font font)
-         (send dc draw-text (number->string v) (+ (* x 40) 10) (+ (* y 40) 1)))
-        (else
-         (send dc set-brush "red" 'solid)
-         (send dc draw-rectangle (* x 40) (* y 40) 40 40))))
-
-(define game
-  (new game-canvas%
-       [parent frame]
-       [paint-callback paint-callback]
-       [min-width (* width 40)]
-       [min-height (* height 40)]
-       [stretchable-width #f]
-       [stretchable-height #f]))
-
-(define pane
-  (new horizontal-pane%
-       [parent frame]))
-
-(define message1
-  (new message%
-       [label ""]
-       [parent pane]
-       [min-width 300]))
-
-(void
- (new button%
-      [label "Simple solver"]
-      [parent pane]
-      [callback simple])
-        
- (new button%
-      [label "Safe solver"]
-      [parent pane]
-      [callback safe])
-
- (new button%
-      [label "Hint"]
-      [parent pane]
-      [callback hint]))
-
-(define message2
-  (new message%
-       [label (number->string remain)]
-       [parent pane]))
-
-(send frame show #t)
+(define ReleaseDC
+  (get-ffi-obj 'ReleaseDC user32
+               (_fun _pointer _pointer -> _bool)))
+(ReleaseDC window dc)
